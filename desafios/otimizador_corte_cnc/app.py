@@ -49,7 +49,7 @@ def main():
 
     # Instantiate and run Particle Swarm Optimization.
     # Assume 'dim' is the problem dimension (set as needed, e.g., equal to len(recortes_disponiveis))
-    ps_optimizer = ParticleSwarm(num_particles=50, num_iterations=10000, dim=len(recortes_disponiveis),
+    ps_optimizer = ParticleSwarm(num_particles=50, num_iterations=1000, dim=len(recortes_disponiveis),
                                  sheet_width=sheet_width, sheet_height=sheet_height, recortes_disponiveis=recortes_disponiveis,
                                  use_gpu=True, show_progress=True, visualization_interval=10)
     print("Running Particle Swarm Optimization...")
