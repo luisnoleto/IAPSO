@@ -3,33 +3,14 @@ import numpy as np
 import random
 import copy
 import time
-from tqdm import tqdm  # Para barra de progresso
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-# Verificar disponibilidade de GPU
-try:
-    import cupy as cp
-    has_gpu = True
-    print("GPU acceleration enabled (CuPy found)")
-except ImportError:
-    has_gpu = False
-    print("GPU acceleration disabled (CuPy not found). Using NumPy instead.")
-    cp = np
-
 class ParticleSwarm(LayoutDisplayMixin):
-    def __init__(self, num_particles, num_iterations, dim, sheet_width, sheet_height, recortes_disponiveis, 
+    def __init__(self, num_particles, num_iterations, dim, sheet_width, sheet_height, recortes_disponiveis,
                  use_gpu=False, show_progress=True, visualization_interval=10):
         """
-        Initializes the Particle Swarm optimizer.
-        :param num_particles: Number of particles.
-        :param num_iterations: Number of iterations to run.
-        :param dim: Dimensionality of the problem.
-        :param sheet_width: Width of the cutting sheet.
-        :param sheet_height: Height of the cutting sheet.
-        :param recortes_disponiveis: List of available parts (JSON structure).
-        :param use_gpu: Whether to use GPU acceleration if available.
-        :param show_progress: Whether to show progress bar during optimization.
-        :param visualization_interval: How often to update visualization (iterations).
+        Inicializa o otimizador Particle Swarm.
         """
         self.num_particles = num_particles
         self.num_iterations = num_iterations
@@ -47,23 +28,21 @@ class ParticleSwarm(LayoutDisplayMixin):
         self.optimized_layout = None
         self.fitness_history = []  # Histórico de fitness para plotagem
         
-        # Novos parâmetros
-        self.use_gpu = use_gpu and has_gpu  # Usar GPU apenas se disponível e solicitado
+        # Parâmetros simplificados
         self.show_progress = show_progress
-        self.visualization_interval = visualization_interval
         
-        # Parâmetros do PSO (ajustados para melhor convergência)
-        self.w = 0.7  # Inércia (aumentada para melhor exploração)
-        self.w_damp = 0.99  # Fator de amortecimento da inércia
-        self.c1 = 1.5  # Coeficiente cognitivo 
-        self.c2 = 2.0  # Coeficiente social (aumentado para dar mais peso ao melhor global)
+        # Parâmetros PSO - SIMPLIFICADOS E ESTÁVEIS
+        self.w = 0.7  # Inércia - valor estável
+        self.c1 = 1.5  # Componente cognitivo (best pessoal)
+        self.c2 = 1.5  # Componente social (best global)
         
-        print(f"Particle Swarm Optimization Initialized with {num_particles} particles and {num_iterations} iterations")
-        if self.use_gpu:
-            print("Using GPU acceleration")
+        # Contador para estagnação
+        self.stagnation_counter = 0
+        
+        print(f"Particle Swarm Optimization iniciado com {num_particles} partículas e {num_iterations} iterações")
 
     def initialize_particles(self):
-        # Initialize particle positions and velocities
+        """Inicializa partículas com posições aleatórias e velocidades."""
         self.particles = []
         self.velocities = []
         self.best_positions = []
@@ -74,8 +53,9 @@ class ParticleSwarm(LayoutDisplayMixin):
             # Criar uma cópia profunda dos recortes para cada partícula
             particle = []
             for recorte in self.recortes_disponiveis:
-                # Criar cópia do recorte com novas posições x,y
+                # Criar cópia do recorte com novas posições
                 novo_recorte = copy.deepcopy(recorte)
+                
                 # Obter largura e altura conforme o tipo do recorte
                 if recorte['tipo'] == 'circular':
                     width = height = recorte['r'] * 2
@@ -96,12 +76,12 @@ class ParticleSwarm(LayoutDisplayMixin):
                 
                 particle.append(novo_recorte)
             
-            # Gerar velocidades aleatórias
+            # Gerar velocidades aleatórias moderadas
             velocity = []
             for recorte in particle:
-                v = {'vx': random.uniform(-5, 5), 'vy': random.uniform(-5, 5)}
+                v = {'vx': random.uniform(-2, 2), 'vy': random.uniform(-2, 2)}
                 if recorte['tipo'] != 'circular':
-                    v['vrot'] = random.uniform(-10, 10)
+                    v['vrot'] = random.uniform(-5, 5)
                 velocity.append(v)
             
             # Adicionar partícula e velocidade às listas
@@ -121,8 +101,10 @@ class ParticleSwarm(LayoutDisplayMixin):
                 self.global_best = copy.deepcopy(particle)
 
     def fitness_function(self, particle):
-        """Avalia a qualidade da disposição dos recortes na chapa."""
-        # Calcula a área total utilizada pelos recortes
+        """
+        Avalia a qualidade da disposição dos recortes na chapa.
+        """
+        # 1. Área utilizada (positivo)
         used_area = 0
         for recorte in particle:
             if recorte['tipo'] == 'circular':
@@ -133,40 +115,48 @@ class ParticleSwarm(LayoutDisplayMixin):
                 used_area += recorte['largura'] * recorte['altura']
         
         total_area = self.sheet_width * self.sheet_height
-        utilization_score = used_area / total_area  # Quanto mais perto de 1, melhor o aproveitamento
-
-        # Distribuição espacial - recompensa espaçamento entre os recortes
+        utilization_score = used_area / total_area  # Entre 0 e 1
+        
+        # 2. Distribuição - recompensa espaço entre peças (positivo)
         distribution_score = 0
         for i in range(len(particle)):
             for j in range(i + 1, len(particle)):
-                # Calcular distância entre os centros dos recortes
                 r1_center_x, r1_center_y = self.get_center(particle[i])
                 r2_center_x, r2_center_y = self.get_center(particle[j])
                 distance = np.sqrt((r1_center_x - r2_center_x)**2 + (r1_center_y - r2_center_y)**2)
                 
-                # Recompensar distância adequada (não muito próxima nem muito distante)
-                optimal_distance = 30  # Valor ajustável
-                distribution_score += min(1, distance / optimal_distance) * 0.02
-
-        # Penalização por sobreposições (AUMENTADA DRASTICAMENTE)
+                # Recompensa por distância adequada entre peças
+                min_distance = 5  # Distância mínima desejada
+                if distance > min_distance:
+                    distribution_score += 0.1
+        
+        # Normalizar score de distribuição para um valor entre 0 e 1
+        if len(particle) > 1:
+            distribution_score /= (len(particle) * (len(particle) - 1) / 2)
+        
+        # 3. Penalidade por sobreposição (negativo) - MENOS AGRESSIVA
         overlap_penalty = 0
         for i in range(len(particle)):
             for j in range(i + 1, len(particle)):
                 if self.is_overlapping(particle[i], particle[j]):
-                    overlap_penalty += 1
+                    r1_center_x, r1_center_y = self.get_center(particle[i])
+                    r2_center_x, r2_center_y = self.get_center(particle[j])
+                    distance = np.sqrt((r1_center_x - r2_center_x)**2 + (r1_center_y - r2_center_y)**2)
+                    
+                    # Penalidade proporcional à gravidade da sobreposição
+                    overlap_penalty += 0.5  # Penalidade mais suave
         
-        # Penalização por sair dos limites da chapa (AUMENTADA)
+        # 4. Penalidade por sair dos limites (negativo)
         boundary_penalty = 0
         for recorte in particle:
             if self.is_out_of_bounds(recorte):
-                boundary_penalty += 1
+                boundary_penalty += 0.5
         
-        # Cálculo do fitness final com pesos ajustados
-        fitness = (utilization_score * 0.4) + (distribution_score * 0.1) - (overlap_penalty * 2.0) - (boundary_penalty * 1.5)
+        # Cálculo final do fitness com pesos mais equilibrados
+        fitness = (utilization_score * 1.0) + (distribution_score * 1.8) - (overlap_penalty * 1.2) - (boundary_penalty * 1.0)
         
-        # Não limitar o fitness a zero permite uma melhor diferenciação entre layouts ruins
         return fitness
-
+    
     def get_center(self, recorte):
         """Retorna as coordenadas centrais do recorte"""
         if recorte['tipo'] == 'circular':
@@ -181,9 +171,7 @@ class ParticleSwarm(LayoutDisplayMixin):
         return center_x, center_y
 
     def is_overlapping(self, recorte1, recorte2):
-        """Verifica se dois recortes estão sobrepostos (simplificado para bounding boxes)."""
-        # Otimizado para melhor desempenho
-        
+        """Verifica se dois recortes estão sobrepostos (simplificado para bounding boxes)."""        
         # Obtém as coordenadas dos cantos dos bounding boxes
         r1_x1, r1_y1 = recorte1['x'], recorte1['y']
         if recorte1['tipo'] == 'circular':
@@ -225,71 +213,11 @@ class ParticleSwarm(LayoutDisplayMixin):
                 x + width > self.sheet_width or 
                 y + height > self.sheet_height)
 
-    def evaluate_particles(self):
-        """Avalia todas as partículas e atualiza melhores posições."""
-        # Usar paralelismo com GPU se disponível
-        if self.use_gpu:
-            # Implementação simplificada - numa implementação completa, 
-            # moveríamos cálculos intensivos para GPU usando CuPy ou CUDA
-            pass
-        
-        best_particle_idx = -1
-        best_fitness_current = float('-inf')
-        
-        for i, particle in enumerate(self.particles):
-            # Calcular fitness da partícula atual
-            fitness = self.fitness_function(particle)
-            
-            # Acompanhar melhor partícula da iteração atual
-            if fitness > best_fitness_current:
-                best_fitness_current = fitness
-                best_particle_idx = i
-            
-            # Atualizar melhor posição pessoal se o fitness atual for melhor
-            if fitness > self.best_fitness_values[i]:
-                self.best_fitness_values[i] = fitness
-                self.best_positions[i] = copy.deepcopy(particle)
-                
-                # Atualizar melhor posição global se necessário
-                if fitness > self.global_best_fitness:
-                    self.global_best_fitness = fitness
-                    self.global_best = copy.deepcopy(particle)
-        
-        return best_particle_idx, best_fitness_current
-
     def update_velocity(self):
         """Atualiza a velocidade de cada partícula."""
         for i in range(self.num_particles):
-            # Verificar se esta partícula está presa (fitness muito baixo)
-            if self.best_fitness_values[i] < -3.0:
-                # Chance de reinicializar a partícula (escape de mínimos locais)
-                if random.random() < 0.2:  # 20% de chance
-                    print(f"Reinicializando partícula {i} que está presa com fitness {self.best_fitness_values[i]}")
-                    particle = []
-                    for recorte in self.recortes_disponiveis:
-                        novo_recorte = copy.deepcopy(recorte)
-                        if recorte['tipo'] == 'circular':
-                            width = height = recorte['r'] * 2
-                        elif recorte['tipo'] == 'triangular':
-                            width = recorte['b']
-                            height = recorte['h']
-                        else:
-                            width = recorte['largura']
-                            height = recorte['altura']
-                        
-                        novo_recorte['x'] = random.uniform(0, self.sheet_width - width)
-                        novo_recorte['y'] = random.uniform(0, self.sheet_height - height)
-                        
-                        if recorte['tipo'] != 'circular':
-                            novo_recorte['rotacao'] = random.uniform(0, 360)
-                        
-                        particle.append(novo_recorte)
-                    
-                    self.particles[i] = particle
-                    continue
-            
             for j in range(len(self.particles[i])):
-                # Componentes de velocidade: inércia + cognitivo + social
+                # Componentes de velocidade simplificados
                 
                 # Fator de inércia (continuar na direção atual)
                 self.velocities[i][j]['vx'] = self.w * self.velocities[i][j]['vx']
@@ -305,8 +233,8 @@ class ParticleSwarm(LayoutDisplayMixin):
                 self.velocities[i][j]['vx'] += self.c2 * r2 * (self.global_best[j]['x'] - self.particles[i][j]['x'])
                 self.velocities[i][j]['vy'] += self.c2 * r2 * (self.global_best[j]['y'] - self.particles[i][j]['y'])
                 
-                # Limitar velocidades máximas para evitar movimentos muito bruscos
-                max_velocity = 10.0
+                # Limitar velocidades para evitar movimentos muito bruscos
+                max_velocity = 5.0  # Valor reduzido para movimentos mais suaves
                 self.velocities[i][j]['vx'] = max(-max_velocity, min(max_velocity, self.velocities[i][j]['vx']))
                 self.velocities[i][j]['vy'] = max(-max_velocity, min(max_velocity, self.velocities[i][j]['vy']))
                 
@@ -333,7 +261,7 @@ class ParticleSwarm(LayoutDisplayMixin):
                     self.velocities[i][j]['vrot'] += self.c2 * r2_rot * global_best_diff
                     
                     # Limitar velocidade de rotação
-                    self.velocities[i][j]['vrot'] = max(-30, min(30, self.velocities[i][j]['vrot']))
+                    self.velocities[i][j]['vrot'] = max(-20, min(20, self.velocities[i][j]['vrot']))
 
     def update_position(self):
         """Atualiza a posição de cada partícula baseado na velocidade."""
@@ -367,10 +295,135 @@ class ParticleSwarm(LayoutDisplayMixin):
         
         # Limitar posição y
         recorte['y'] = max(0, min(self.sheet_height - height, recorte['y']))
+    
+    def perturb_particles(self, intensity=0.5):
+        """
+        Perturba as partículas para aumentar exploração.
+        :param intensity: Intensidade da perturbação (0-1)
+        """
+        intensity = intensity * 50  # Aumentar intensidade para perturbações mais significativas
+        print(f"Aplicando perturbação com intensidade {intensity:.2f}")
+        
+        # Preservar a melhor partícula
+        best_index = self.best_fitness_values.index(max(self.best_fitness_values))
+        
+        # Calcular número de partículas a perturbar baseado na intensidade
+        num_to_perturb = int(self.num_particles * min(0.9, intensity))
+        
+        # Selecionar índices de partículas para perturbar (exceto a melhor)
+        indices = list(range(self.num_particles))
+        indices.remove(best_index)
+        random.shuffle(indices)
+        indices_to_perturb = indices[:num_to_perturb]
+        
+        for i in indices_to_perturb:
+            for j in range(len(self.particles[i])):
+                # Deslocamento proporcional à intensidade (muito mais agressivo)
+                max_shift = intensity * 90  # Aumentado para 50 (antes era 20)
+                
+                # Aplicar perturbação diretamente, não baseada em probabilidade
+                self.particles[i][j]['x'] += random.uniform(-max_shift, max_shift)
+                self.particles[i][j]['y'] += random.uniform(-max_shift, max_shift)
+                
+                # Perturbar rotação de forma mais significativa
+                if 'rotacao' in self.particles[i][j]:
+                    angle_shift = intensity * 20  # Aumentado para 60 graus (antes era 30)
+                    self.particles[i][j]['rotacao'] = random.uniform(0, 360)  # Rotação completamente nova
+                
+                # Garantir limites
+                self.enforce_boundaries(self.particles[i][j])
+    
 
-    def get_best_solution(self):
-        """Retorna a melhor solução encontrada."""
-        return self.global_best
+    def run(self):
+        """
+        Executa o algoritmo PSO simplificado.
+        """
+        # Inicialização
+        self.initialize_particles()
+        
+        print("Iniciando otimização...")
+        start_time = time.time()
+        
+        # Definir parâmetros de controle de estagnação
+        best_fitness_so_far = float('-inf')
+        stagnation_counter = 0
+        stagnation_threshold = 50  # Número de iterações sem melhoria para considerar estagnação
+        
+        # Loop principal - SIMPLIFICADO
+        iterator = tqdm(range(self.num_iterations), desc="Otimização PSO")
+        for iteration in iterator:
+            # 1. Avaliar partículas
+            for i, particle in enumerate(self.particles):
+                fitness = self.fitness_function(particle)
+                
+                # Atualizar melhor posição pessoal
+                if fitness > self.best_fitness_values[i]:
+                    self.best_fitness_values[i] = fitness
+                    self.best_positions[i] = copy.deepcopy(particle)
+                    
+                    # Atualizar melhor global
+                    if fitness > self.global_best_fitness:
+                        self.global_best_fitness = fitness
+                        self.global_best = copy.deepcopy(particle)
+            
+            # Registrar histórico
+            self.fitness_history.append(self.global_best_fitness)
+            
+            # 2. Verificar estagnação
+            if self.global_best_fitness > best_fitness_so_far:
+                best_fitness_so_far = self.global_best_fitness
+                stagnation_counter = 0
+            else:
+                stagnation_counter += 1
+            
+            # Aplicar perturbação se estagnado
+            if stagnation_counter >= stagnation_threshold:
+                intensity = min(0.1 + (stagnation_counter - stagnation_threshold) / 100, 0.8)
+                self.perturb_particles(intensity)
+                stagnation_counter = 0  # Resetar contador
+            
+            # 3. Atualizar velocidades e posições
+            self.update_velocity()
+            self.update_position()
+            
+            # Atualizar descrição da barra de progresso
+            if self.show_progress:
+                iterator.set_description(f"Fitness: {self.global_best_fitness:.4f}")
+        
+        # Refinamento final - focar na melhor solução
+        print("Refinamento final...")
+        self.w = 0.5  # Menor inércia
+        self.c1 = 1.0  # Menos exploração pessoal
+        self.c2 = 2.0  # Mais convergência global
+        
+        for _ in range(self.num_iterations // 10):
+            # Avaliar e atualizar
+            for i, particle in enumerate(self.particles):
+                fitness = self.fitness_function(particle)
+                
+                # Verificar se não há sobreposição antes de aceitar como melhor
+                has_overlap = any(self.is_overlapping(particle[i1], particle[i2]) 
+                                for i1 in range(len(particle)) 
+                                for i2 in range(i1+1, len(particle)))
+                
+                if not has_overlap and fitness > self.best_fitness_values[i]:
+                    self.best_fitness_values[i] = fitness
+                    self.best_positions[i] = copy.deepcopy(particle)
+                    
+                    if fitness > self.global_best_fitness:
+                        self.global_best_fitness = fitness
+                        self.global_best = copy.deepcopy(particle)
+            
+            self.update_velocity()
+            self.update_position()
+        
+        elapsed_time = time.time() - start_time
+        print(f"\nOtimização completa em {elapsed_time:.2f} segundos")
+        print(f"Melhor fitness: {self.global_best_fitness:.6f}")
+        
+        # Retornar melhor solução
+        self.optimized_layout = self.global_best
+        return self.optimized_layout
     
     def plot_progress(self):
         """Plota o progresso do fitness ao longo das iterações."""
@@ -381,116 +434,20 @@ class ParticleSwarm(LayoutDisplayMixin):
         plt.ylabel('Melhor Fitness')
         plt.grid(True)
         plt.show()
-
-    def run(self):
-        """
-        Executa o loop principal do algoritmo Particle Swarm.
-        Este método deve retornar o layout otimizado (estrutura JSON).
-        """
-        # Inicializar partículas
-        self.initialize_particles()
-        
-        print("Starting optimization...")
-        start_time = time.time()
-        
-        # Ajustar parâmetros iniciais
-        self.w = 0.9  # Inércia inicial mais alta para exploração
-        self.c1 = 1.2  # Fator cognitivo (pessoal)
-        self.c2 = 1.8  # Fator social (global)
-        
-        # Estratégia de resfriamento da inércia
-        w_start = self.w
-        w_end = 0.4
-        
-        # Loop principal do PSO com barra de progresso
-        iterator = tqdm(range(self.num_iterations)) if self.show_progress else range(self.num_iterations)
-        
-        best_fitness_without_improvement = 0
-        last_improvement = 0
-        
-        for iteration in iterator:
-            # Avaliar partículas
-            best_idx, best_fitness = self.evaluate_particles()
-            
-            # Registrar melhor fitness para histórico
-            self.fitness_history.append(self.global_best_fitness)
-            
-            # Verificar se houve melhoria
-            if len(self.fitness_history) > 1 and self.global_best_fitness > self.fitness_history[-2]:
-                last_improvement = iteration
-            
-            # Se não houver melhoria por muitas iterações, perturbar as partículas
-            if iteration - last_improvement > 100:
-                print(f"\nEstagnação detectada na iteração {iteration}. Perturbando partículas...")
-                self.perturb_particles()
-                last_improvement = iteration
-            
-            # Atualizar velocidades
-            self.update_velocity()
-            
-            # Atualizar posições
-            self.update_position()
-            
-            # Atualizar inércia com esquema de resfriamento linear
-            self.w = w_start - (w_start - w_end) * (iteration / self.num_iterations)
-            
-            # Exibir progresso
-            if self.show_progress:
-                # Atualiza a descrição da barra de progresso
-                iterator.set_description(f"Fitness: {self.global_best_fitness:.4f}")
-            elif (iteration + 1) % 10 == 0:
-                print(f"Iteração {iteration + 1}/{self.num_iterations}: Melhor fitness = {self.global_best_fitness:.4f}")
-            
-            # Visualização intermediária
-            if (iteration + 1) % self.visualization_interval == 0:
-                print(f"\nIteração {iteration + 1}: Melhor fitness = {self.global_best_fitness:.4f}")
-                # Mostrar visualização intermediária para debugar
-                if self.global_best_fitness > 0:  # Só mostrar layouts bons
-                    self.display_layout(self.global_best, title=f"Iteration {iteration+1} - Best Layout")
-        
-        # Exibir estatísticas finais
-        elapsed_time = time.time() - start_time
-        print(f"\nOtimização completa em {elapsed_time:.2f} segundos")
-        print(f"Melhor fitness: {self.global_best_fitness:.6f}")
-        
-        # Retornar melhor solução encontrada
-        self.optimized_layout = self.global_best
-        return self.optimized_layout
-
-    def perturb_particles(self):
-        """Perturba as partículas para escapar de mínimos locais"""
-        for i in range(self.num_particles):
-            # Perturbar apenas algumas partículas
-            if random.random() < 0.3:  # 30% das partículas
-                continue
-                
-            for j in range(len(self.particles[i])):
-                # Adicionar perturbação às posições
-                self.particles[i][j]['x'] += random.uniform(-20, 20)
-                self.particles[i][j]['y'] += random.uniform(-20, 20)
-                
-                # Perturbar rotação se aplicável
-                if 'rotacao' in self.particles[i][j]:
-                    self.particles[i][j]['rotacao'] = (self.particles[i][j]['rotacao'] + random.uniform(-30, 30)) % 360
-                
-                # Garantir que continuem dentro dos limites
-                self.enforce_boundaries(self.particles[i][j])
-
+    
     def optimize_and_display(self):
-        """
-        Mostra o layout inicial, executa a otimização e depois mostra o layout otimizado.
-        """
+        """Mostra o layout inicial, executa a otimização e depois mostra o layout otimizado."""
         # Mostrar layout inicial
-        print("Displaying initial layout...")
-        self.display_layout(self.initial_layout, title="Initial Layout - Particle Swarm")
+        print("Exibindo layout inicial...")
+        self.display_layout(self.initial_layout, title="Layout Inicial - Particle Swarm")
         
         # Executar a otimização
-        print("Running optimization...")
+        print("Executando otimização...")
         self.optimized_layout = self.run()
         
         # Mostrar layout otimizado
-        print("Displaying optimized layout...")
-        self.display_layout(self.optimized_layout, title="Optimized Layout - Particle Swarm")
+        print("Exibindo layout otimizado...")
+        self.display_layout(self.optimized_layout, title="Layout Otimizado - Particle Swarm")
         
         # Plotar gráfico de progresso
         self.plot_progress()
