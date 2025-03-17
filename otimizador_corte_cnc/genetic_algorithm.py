@@ -100,7 +100,7 @@ class GeneticAlgorithm(LayoutDisplayMixin):
                         best_rect_idx = i
                         best_rotation = 0
             
-            if best_fit is not None:
+            if best_fit is not None:                               
                 rx, ry, width, height = best_fit
                 recorte['x'] = rx
                 recorte['y'] = ry
@@ -231,7 +231,7 @@ class GeneticAlgorithm(LayoutDisplayMixin):
             
             eficiencia_tipo = self.calcular_eficiencia_tipo(layout)
             num_overlaps = self.detect_overlaps(layout)
-            overlap_penalty = num_overlaps * 1000.0
+            overlap_penalty = num_overlaps * 200.0
             
             # Fitness final com pesos otimizados
             fitness = (
@@ -255,9 +255,18 @@ class GeneticAlgorithm(LayoutDisplayMixin):
                 self.optimized_layout = layout
 
     def calcular_eficiencia_tipo(self, layout):
-        """"Este método deveria calcular a eficiência do layout com base nos tipos de recortes utilizados.
-        No código enviado, ele ainda não está implementado.
-        Pode ser usado para favorecer layouts que maximizem determinados tipos de recortes.
+        """
+        Calcula a eficiência do layout com base nos tipos e posições dos recortes.
+        
+        Este método atribui pontuações aos recortes conforme sua posição:
+        - Retângulos próximos às bordas recebem pontuação positiva (são posicionados de forma eficiente)
+        - Diamantes longe do centro recebem pontuação negativa (não ideal para esse formato)
+        
+        Args:
+            layout: Lista de recortes posicionados
+            
+        Returns:
+            float: Pontuação média de eficiência por recorte (normalizada pelo número de peças)
         """
         if not layout:
             return 0
@@ -267,133 +276,255 @@ class GeneticAlgorithm(LayoutDisplayMixin):
             if peca['tipo'] == 'retangular':
                 distancia_borda = min(peca['x'], peca['y'])
                 if distancia_borda < 20:
-                    score += 2
+                    score += 2  # Bonificação para retângulos próximos às bordas
             elif peca['tipo'] == 'diamante':
                 centro_x, centro_y = self.sheet_width / 2, self.sheet_height / 2
                 distancia_centro = math.sqrt((peca['x'] - centro_x)**2 + (peca['y'] - centro_y)**2)
                 if distancia_centro > self.sheet_width / 4:
-                    score -= 1
+                    score -= 1  # Penalidade para diamantes longe do centro
         
         return score / len(layout)
-
+    
     def selection_tournament(self):
+        """
+        Implementa o método de seleção por torneio para escolher indivíduos para reprodução.
+        
+        No torneio, grupos de 'tam_torneio' indivíduos são selecionados aleatoriamente,
+        e o melhor de cada grupo (com maior fitness) é escolhido para a próxima geração.
+        Esta abordagem equilibra a pressão seletiva, permitindo diversidade enquanto
+        favorece soluções de alta qualidade.
+        
+        Returns:
+            list: Lista de indivíduos selecionados para reprodução
+        """
         selected = []
         for _ in range(self.TAM_POP):
             competitors = random.sample(range(self.TAM_POP), self.tam_torneio)
             best = max(competitors, key=lambda idx: self.aptidao[idx])
             selected.append(self.POP[best].copy())
         return selected
-
+    
     def crossover_order(self, parent1, parent2):
+        """
+        Implementa o operador de cruzamento de ordem (Order Crossover - OX) para permutações.
+        
+        Este tipo de cruzamento é específico para problemas de permutação, como este caso onde
+        cada cromossomo é uma sequência de índices. O método:
+        1. Seleciona aleatoriamente uma seção de parent1
+        2. Copia essa seção para o filho na mesma posição
+        3. Preenche o restante do cromossomo do filho com genes do parent2, mantendo a ordem
+        4. Evita duplicatas, garantindo que o filho seja uma permutação válida
+        
+        Args:
+            parent1: Primeiro cromossomo parental
+            parent2: Segundo cromossomo parental
+            
+        Returns:
+            list: Cromossomo filho resultante do cruzamento
+        """
         if random.random() > self.taxa_cruzamento:
-            return parent1.copy()
+            return parent1.copy()  # Se não ocorrer cruzamento, retorna cópia do primeiro pai
             
         size = len(parent1)
+        # Seleciona dois pontos aleatórios para definir a seção a ser copiada
         p1, p2 = sorted(random.sample(range(size), 2))
         
+        # Inicializa o filho com valores nulos
         child = [None] * size
+        
+        # Copia a seção selecionada do parent1
         for i in range(p1, p2 + 1):
             child[i] = parent1[i]
         
+        # Preenche o restante do filho com genes do parent2, mantendo a ordem
         j = p2 + 1
         for i in range(p2 + 1, p2 + 1 + size):
             idx = i % size
             val = parent2[idx]
+            # Se o valor ainda não estiver no filho, adiciona-o
             if val not in child:
                 child[j % size] = val
                 j += 1
         
         return child
-
+    
     def mutation_swap(self, individual):
+        """
+        Aplica o operador de mutação por troca (swap mutation) em um indivíduo.
+        
+        Com probabilidade igual a taxa_mutacao, seleciona duas posições aleatórias
+        no cromossomo e troca seus valores. Este é um operador de mutação apropriado
+        para problemas de permutação, pois mantém a validade da solução.
+        
+        Args:
+            individual: Cromossomo a ser potencialmente mutado
+            
+        Returns:
+            list: Cromossomo potencialmente mutado
+        """
         if random.random() <= self.taxa_mutacao:
             size = len(individual)
+            # Seleciona duas posições aleatórias
             i, j = random.sample(range(size), 2)
+            # Troca os valores nas posições selecionadas
             individual[i], individual[j] = individual[j], individual[i]
         return individual
-
+    
     def genetic_operators(self):
+        """
+        Aplica os operadores genéticos para criar a nova população.
+        
+        Este método implementa:
+        1. Seleção por torneio para escolher os pais
+        2. Elitismo (se habilitado) - preserva o melhor indivíduo da geração atual
+        3. Cruzamento para gerar filhos
+        4. Mutação para introduzir variabilidade
+        
+        O método regenera completamente a população para a próxima geração,
+        mantendo seu tamanho constante.
+        """
+        # Seleção de indivíduos para reprodução
         selected = self.selection_tournament()
         new_pop = []
         
+        # Implementa elitismo, preservando o melhor indivíduo encontrado até agora
         if self.elitismo and self.melhor_individuo is not None:
             new_pop.append(self.melhor_individuo.copy())
         
+        # Cria novos indivíduos até completar o tamanho da população
         while len(new_pop) < self.TAM_POP:
+            # Seleciona dois pais aleatoriamente entre os selecionados
             parent1 = random.choice(selected)
             parent2 = random.choice(selected)
+            # Aplica cruzamento para gerar um filho
             child = self.crossover_order(parent1, parent2)
+            # Aplica mutação no filho gerado
             child = self.mutation_swap(child)
+            # Adiciona o filho à nova população
             new_pop.append(child)
         
+        # Atualiza a população para a próxima geração
         self.POP = new_pop[:self.TAM_POP]
-
+    
     def run(self):
+        """
+        Executa o algoritmo genético completo por um número especificado de gerações.
+        
+        Este método implementa o ciclo principal do algoritmo genético:
+        1. Avalia cada indivíduo na população
+        2. Registra o melhor fitness e acompanha o progresso
+        3. Aplica operadores genéticos para criar a próxima geração
+        4. Repete este processo por 'numero_geracoes' vezes
+        5. No final, reporta os resultados da otimização
+        
+        Returns:
+            list: Layout otimizado de recortes
+        """
+        # Cria barra de progresso para visualização do andamento
         progress_bar = tqdm(total=self.numero_geracoes, desc="Otimização GA", ncols=100)
         
+        # Loop principal - executa para cada geração
         for gen in range(self.numero_geracoes):
+            # Avalia todos os indivíduos da população atual
             self.evaluate()
+            # Identifica o melhor fitness desta geração
             best_fitness = max(self.aptidao)
+            # Registra o histórico de evolução do fitness
             self.melhor_aptidoes.append(best_fitness)
             
+            # Atualiza a barra de progresso
             progress_bar.set_description(f"GA | Fitness: {best_fitness:.2f}")
             progress_bar.update(1)
             
+            # Exibe informações a cada 5 gerações
             if gen % 5 == 0:
                 print(f"Geração {gen}: Melhor Fitness = {best_fitness:.2f}")
                 if self.optimized_layout:
                     print(f"Recortes posicionados: {len(self.optimized_layout)}/{len(self.initial_layout)}")
             
+            # Cria a próxima geração aplicando os operadores genéticos
             self.genetic_operators()
         
+        # Fecha a barra de progresso
         progress_bar.close()
+        
+        # Avalia a população final
         self.evaluate()
         
+        # Se encontrou uma solução válida, reporta os resultados
         if self.melhor_individuo:
             decoded = self.decode_chromosome(self.melhor_individuo)
             self.optimized_layout = decoded['layout']
             espaco_livre_total = decoded['espaco_livre_direita'] + len(self.optimized_layout) * 1.0
             
+            # Exibe relatório completo sobre a solução encontrada
             print(f"\nResultado Final após {self.numero_geracoes} gerações:")
             print(f"Melhor Fitness: {self.melhor_fitness:.2f}")
-            print(f"Recortes posicionados: {len(self.optimized_layout)}/{len(self.initial_layout)}")
-            print(f"Espaço livre total: {espaco_livre_total:.2f} unidades")
-            print(f"Componente de compactação: {decoded['max_x_usado']:.2f}/{self.sheet_width}")
-            print(f"Componente de eficiência: {self.calcular_eficiencia_tipo(self.optimized_layout):.2f}")
-            print(f"Colisões: {self.detect_overlaps(self.optimized_layout)}")
-            print(f"Taxa de posicionamento: {decoded['n_posicionados']}/{decoded['n_total']}")
-            print(f"Espaço livre à direita: {decoded['espaco_livre_direita']:.2f} unidades")
- 
-        
+            print(f"Espaço livre total: {espaco_livre_total:.2f} unidades")           
         return self.optimized_layout
-
+       
     def optimize_and_display(self):
+        """
+        Orquestra o processo completo de otimização e visualização dos resultados.
+        
+        Este método:
+        1. Exibe o layout inicial de recortes
+        2. Executa o algoritmo genético para otimização
+        3. Exibe o layout otimizado final
+        4. Mostra o gráfico de evolução do fitness ao longo das gerações
+        
+        Returns:
+            list: Layout otimizado de recortes
+        """
+        # Exibe o layout inicial antes da otimização
         self.display_layout(self.initial_layout, title="Layout Inicial - Algoritmo Genético")
+        
+        # Executa o algoritmo genético
         self.optimized_layout = self.run()
+        
+        # Exibe o layout otimizado
         self.display_layout(self.optimized_layout, title="Layout Otimizado - Algoritmo Genético")
+        
+        # Exibe o gráfico de evolução do fitness
         self.plot_fitness_evolution()
+        
         return self.optimized_layout
         
     def plot_fitness_evolution(self):
         """
         Exibe um gráfico mostrando a evolução do fitness ao longo das gerações.
+        
+        Este método utiliza matplotlib para criar uma visualização gráfica do progresso
+        do algoritmo genético, mostrando como o valor de fitness do melhor indivíduo
+        evoluiu durante a execução. Inclui:
+        1. Linha de tendência do fitness
+        2. Destaque para o valor final de fitness
+        3. Anotação com o valor exato de fitness final
         """
         import matplotlib.pyplot as plt
         
+        # Cria uma nova figura
         plt.figure(figsize=(10, 6))
+        
+        # Plota a linha de evolução do fitness
         plt.plot(range(len(self.melhor_aptidoes)), self.melhor_aptidoes, 'b-', linewidth=2)
+        
+        # Define título e rótulos dos eixos
         plt.title('Evolução do Fitness - Algoritmo Genético')
         plt.xlabel('Geração')
         plt.ylabel('Fitness')
         plt.grid(True)
         
-        # Destaque para o valor final
+        # Destaca o ponto final (valor final de fitness)
         plt.scatter(len(self.melhor_aptidoes)-1, self.melhor_aptidoes[-1], 
                    color='red', s=100, zorder=5)
+        
+        # Adiciona anotação com o valor de fitness final
         plt.annotate(f'Final: {self.melhor_aptidoes[-1]:.2f}', 
                     (len(self.melhor_aptidoes)-1, self.melhor_aptidoes[-1]),
                     xytext=(10, -20), textcoords='offset points',
                     fontsize=12, color='darkred')
         
+        # Ajusta o layout e exibe o gráfico
         plt.tight_layout()
         plt.show()
