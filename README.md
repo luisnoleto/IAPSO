@@ -1,11 +1,11 @@
-## Algoritmo Genético para Otimização de Recortes em Chapas CNC
+# Algoritmo Genético para Otimização de Recortes em Chapas CNC
 
-# Introdução
+## Introdução
 
 Este repositório contém a implementação de um algoritmo genético desenvolvido para otimizar a disposição de recortes em chapas metálicas em máquinas CNC. 
 O objetivo principal é reduzir o desperdício de material e minimizar o consumo de energia durante o processo de corte. Foi utilizado um algoritmo genético, que apresentou resultados na organização eficiente dos recortes.
 
-# Funcionalidades
+## Funcionalidades
 
 Otimização da disposição dos recortes: Reduz desperdício de material, permitindo o reaproveitamento de sobras.
 
@@ -15,7 +15,7 @@ Redução no consumo de energia: Evita cortes desnecessários que aumentam o tem
 
 Configuração flexível: Permite ajustar parâmetros de seleção, cruzamento e mutação para diferentes tipos de posicionamentos, alem de conseguir otimizar diferentes formatos e tamanhos de recortes.
 
-# Instalação e Uso
+## Instalação e Uso
 
 Clone este repositório:
 
