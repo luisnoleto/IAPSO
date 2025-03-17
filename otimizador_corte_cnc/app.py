@@ -30,8 +30,8 @@ def main():
     ]
 
     # Instantiate and run Genetic Algorithm.
-    ga_optimizer = GeneticAlgorithm(TAM_POP=100, recortes_disponiveis=recortes_disponiveis,
-                                    sheet_width=sheet_width, sheet_height=sheet_height, numero_geracoes=300)
+    ga_optimizer = GeneticAlgorithm(TAM_POP=50, recortes_disponiveis=recortes_disponiveis,
+                                    sheet_width=sheet_width, sheet_height=sheet_height, numero_geracoes=200)
     print("Running Genetic Algorithm...")
     ga_optimized_layout = ga_optimizer.optimize_and_display()
 
